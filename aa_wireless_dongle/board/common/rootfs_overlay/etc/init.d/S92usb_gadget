@@ -3,20 +3,27 @@
 # Configure USB gadget interfaces
 #
 
+# Set the serial number for the USB gadget
 SERIAL_NUMBER="0123456"
+# Set the manufacturer name for the USB gadget
 MANUFACTURER="My Own"
+# Set the product name for the USB gadget
 PRODUCT="AA Wireless Dongle"
 
+# Define the names for the accessory and default USB gadgets
 ACCESSORY_GADGET_NAME="accessory"
 DEFAULT_GADGET_NAME="default"
 
+# Define the path for the FunctionFS
 FUNCTIONFS_PATH=/dev/ffs-mtp
+# Define the daemon name and PID file path
 DAEMON=umtprd
 PIDFILE="/var/run/$DAEMON.pid"
 
 RETVAL=0
 
 start() {
+	# Start the USB gadget setup process
 	printf "Setting up usb_gadgets: "
 	mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
 
@@ -57,6 +64,7 @@ start() {
 	# Setting up usb_gadget:
 	echo "OK"
 
+	# Start the USB gadget daemon
 	printf "Starting $DAEMON: "
 	if [ ! -f "$FUNCTIONFS_PATH" ]; then
 		mkdir "$FUNCTIONFS_PATH"
@@ -69,6 +77,7 @@ start() {
 }
 
 stop() {
+	# Stop the USB gadget setup process
 	printf "Disabe usb_gadgets: "
 	cd /sys/kernel/config/usb_gadget
 	echo "" > "$ACCESSORY_GADGET_NAME"/UDC
@@ -77,6 +86,7 @@ stop() {
 	# Disabe usb_gadget:
 	echo "OK"
 
+	# Stop the USB gadget daemon
 	printf "Stopping $DAEMON: "
 	start-stop-daemon -K -q -s 9 -p "$PIDFILE"
 	RETVAL=$?
@@ -86,6 +96,7 @@ stop() {
 }
 
 restart() {
+	# Restart the USB gadget setup process
 	stop
 	sleep 1
 	start

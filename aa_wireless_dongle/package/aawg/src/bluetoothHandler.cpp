@@ -5,6 +5,7 @@
 #include "bluetoothProfiles.h"
 #include "bluetoothAdvertisement.h"
 
+// Constants for Bluetooth adapter and profile settings
 static constexpr const char* ADAPTER_ALIAS = "AA Wireless Dongle";
 static constexpr const char* ADAPTER_ALIAS_DONGLE = "AndroidAuto-Dongle";
 
@@ -27,7 +28,7 @@ static constexpr const char* HSP_HS_PROFILE_OBJECT_PATH = "/com/aawgd/bluetooth/
 static constexpr const char* HSP_AG_UUID = "00001112-0000-1000-8000-00805f9b34fb";
 static constexpr const char* HSP_HS_UUID = "00001108-0000-1000-8000-00805f9b34fb";
 
-
+// BluezAdapterProxy class definition
 class BluezAdapterProxy: private DBus::ObjectProxy {
     BluezAdapterProxy(std::shared_ptr<DBus::Connection> conn, DBus::Path path): DBus::ObjectProxy(conn, BLUEZ_BUS_NAME, path) {
         alias = this->create_property<std::string>(INTERFACE_BLUEZ_ADAPTER, "Alias");
@@ -54,12 +55,13 @@ public:
     std::shared_ptr<DBus::MethodProxy<void(DBus::Path)>> unregisterAdvertisement;
 };
 
-
+// BluetoothHandler class definition
 BluetoothHandler& BluetoothHandler::instance() {
     static BluetoothHandler instance;
     return instance;
 }
 
+// Get managed objects from BlueZ
 DBus::ManagedObjects BluetoothHandler::getBluezObjects() {
     std::shared_ptr<DBus::ObjectProxy> m_bluezRootObject = m_connection->create_object_proxy(BLUEZ_BUS_NAME, BLUEZ_ROOT_OBJECT_PATH);
     DBus::MethodProxy getManagedObjects = *(m_bluezRootObject->create_method<DBus::ManagedObjects(void)>("org.freedesktop.DBus.ObjectManager", "GetManagedObjects"));
@@ -67,6 +69,7 @@ DBus::ManagedObjects BluetoothHandler::getBluezObjects() {
     return getManagedObjects();
 }
 
+// Initialize the Bluetooth adapter
 void BluetoothHandler::initAdapter() {
     DBus::ManagedObjects objects = getBluezObjects();
 
@@ -93,6 +96,7 @@ void BluetoothHandler::initAdapter() {
     }
 }
 
+// Set the power state of the Bluetooth adapter
 void BluetoothHandler::setPower(bool on) {
     if (!m_adapter) {
         return;
@@ -102,6 +106,7 @@ void BluetoothHandler::setPower(bool on) {
     Logger::instance()->info("Bluetooth adapter was powered %s\n", on ? "on" : "off");
 }
 
+// Set the pairable state of the Bluetooth adapter
 void BluetoothHandler::setPairable(bool pairable) {
     if (!m_adapter) {
         return;
@@ -112,6 +117,7 @@ void BluetoothHandler::setPairable(bool pairable) {
     Logger::instance()->info("Bluetooth adapter is now discoverable and pairable\n");
 }
 
+// Export Bluetooth profiles
 void BluetoothHandler::exportProfiles() {
     std::shared_ptr<DBus::ObjectProxy> bluezObject = m_connection->create_object_proxy(BLUEZ_BUS_NAME, BLUEZ_OBJECT_PATH);
     DBus::MethodProxy registerProfile = *(bluezObject->create_method<void(DBus::Path, std::string, DBus::Properties)>(INTERFACE_BLUEZ_PROFILE_MANAGER, "RegisterProfile"));
@@ -142,6 +148,7 @@ void BluetoothHandler::exportProfiles() {
     }
 }
 
+// Start Bluetooth Low Energy (BLE) advertising
 void BluetoothHandler::startAdvertising() {
     if (!m_adapter) {
         return;
@@ -162,6 +169,7 @@ void BluetoothHandler::startAdvertising() {
     Logger::instance()->info("BLE Advertisement started\n");
 }
 
+// Stop Bluetooth Low Energy (BLE) advertising
 void BluetoothHandler::stopAdvertising() {
     if (!m_adapter) {
         return;
@@ -171,6 +179,7 @@ void BluetoothHandler::stopAdvertising() {
     Logger::instance()->info("BLE Advertisement stopped\n");
 }
 
+// Connect to a Bluetooth device
 void BluetoothHandler::connectDevice() {
     DBus::ManagedObjects objects = getBluezObjects();
 
@@ -223,6 +232,7 @@ void BluetoothHandler::connectDevice() {
     }
 }
 
+// Retry connection loop for Bluetooth devices
 void BluetoothHandler::retryConnectLoop() {
     bool should_exit = false;
     std::future<void> connectWithRetryFuture = connectWithRetryPromise->get_future();
@@ -241,6 +251,7 @@ void BluetoothHandler::retryConnectLoop() {
     }
 }
 
+// Initialize the Bluetooth handler
 void BluetoothHandler::init() {
     // DBus::set_logging_function( DBus::log_std_err );
     // DBus::set_log_level( SL_TRACE );
@@ -254,6 +265,7 @@ void BluetoothHandler::init() {
     exportProfiles();
 }
 
+// Power on the Bluetooth adapter
 void BluetoothHandler::powerOn() {
     if (!m_adapter) {
         return;
@@ -267,6 +279,7 @@ void BluetoothHandler::powerOn() {
     }
 }
 
+// Connect to a Bluetooth device with retry logic
 std::optional<std::thread> BluetoothHandler::connectWithRetry() {
     if (!m_adapter) {
         return std::nullopt;
@@ -276,12 +289,14 @@ std::optional<std::thread> BluetoothHandler::connectWithRetry() {
     return std::thread(&BluetoothHandler::retryConnectLoop, this);
 }
 
+// Stop the retry connection loop
 void BluetoothHandler::stopConnectWithRetry() {
     if (connectWithRetryPromise) {
         connectWithRetryPromise->set_value();
     }
 }
 
+// Power off the Bluetooth adapter
 void BluetoothHandler::powerOff() {
     if (!m_adapter) {
         return;

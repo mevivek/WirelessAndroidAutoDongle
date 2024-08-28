@@ -6,29 +6,34 @@
 DAEMON="aawgd"
 PIDFILE="/var/run/$DAEMON.pid"
 
-
 RETVAL=0
 
 case "$1" in
 	start)
+		# Start the aawgd daemon
 		printf "Starting $DAEMON: "
+		# Export environment variables from the configuration file
 		export $(grep -v '^#' /etc/aawgd.env | xargs)
+		# Start the daemon using start-stop-daemon
 		start-stop-daemon -S -b -q -m -p "$PIDFILE" -x "/usr/bin/$DAEMON"
 		RETVAL=$?
 		[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
 		;;
 	stop)
+		# Stop the aawgd daemon
 		printf "Stopping $DAEMON: "
+		# Stop the daemon using start-stop-daemon
 		start-stop-daemon -K -q -p "$PIDFILE"
 		RETVAL=$?
 		[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
 		;;
 	restart)
+		# Restart the aawgd daemon
 		$0 stop
 		$0 start
 		;;
 	*)
-		echo "Usage: $0 {start|stop}"
+		echo "Usage: $0 {start|stop|restart}"
 		;;
 esac
 

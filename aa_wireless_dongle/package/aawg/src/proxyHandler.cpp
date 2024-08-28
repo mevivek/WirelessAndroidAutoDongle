@@ -16,10 +16,12 @@
 #include "bluetoothHandler.h"
 #include "proxyHandler.h"
 
+// Signal handler to interrupt the thread
 void empty_signal_handler(int signal) {
     // Empty. We don't want to do anything but interrupt the thread.
 }
 
+// Read the specified number of bytes from the file descriptor
 ssize_t AAWProxy::readFully(int fd, unsigned char *buffer, size_t nbyte) {
     size_t remaining_bytes = nbyte;
     while (remaining_bytes > 0) {
@@ -37,6 +39,7 @@ ssize_t AAWProxy::readFully(int fd, unsigned char *buffer, size_t nbyte) {
     return nbyte;
 }
 
+// Read a message from the file descriptor
 ssize_t AAWProxy::readMessage(int fd, unsigned char *buffer, size_t buffer_len) {
     size_t header_length = 4;
     if (ssize_t len = readFully(fd, buffer, header_length); len <= 0) {
@@ -65,6 +68,7 @@ ssize_t AAWProxy::readMessage(int fd, unsigned char *buffer, size_t buffer_len) 
     return header_length + message_length;
 }
 
+// Forward data between TCP and USB
 void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit) {
     size_t buffer_len = 16384;
     unsigned char buffer[buffer_len];
@@ -139,6 +143,7 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
     stopForwarding(should_exit);
 }
 
+// Stop forwarding data between TCP and USB
 void AAWProxy::stopForwarding(std::atomic<bool>& should_exit) {
     Logger::instance()->info("Interrupting threads to stop forwarding\n");
     should_exit = true;
@@ -152,6 +157,7 @@ void AAWProxy::stopForwarding(std::atomic<bool>& should_exit) {
     }
 }
 
+// Handle client connection
 void AAWProxy::handleClient(int server_sock) {
     struct sockaddr client_address;
     socklen_t client_addresslen = sizeof(client_address);
@@ -222,6 +228,7 @@ void AAWProxy::handleClient(int server_sock) {
     Logger::instance()->info("Forwarding stopped\n");
 }
 
+// Start the TCP server
 std::optional<std::thread> AAWProxy::startServer(int32_t port) {
     Logger::instance()->info("Starting tcp server\n");
     int server_sock;
