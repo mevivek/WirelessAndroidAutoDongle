@@ -1,7 +1,13 @@
+# This file contains the configuration for the Raspberry Pi boot process.
+
+# Specify the kernel image to use
 kernel=zImage
 
+# Disable the splash screen and set boot delay to 0
 disable_splash=1
 boot_delay=0
+
+# Disable the PoE fan
 disable_poe_fan=1
 
 # To use an external initramfs file
@@ -10,7 +16,8 @@ disable_poe_fan=1
 # Disable overscan assuming the display supports displaying the full resolution
 # If the text shown on the screen disappears off the edge, comment this out
 disable_overscan=1
-# Add the following line if the board need reduce power drain and increase performance disabling hdmi port
+
+# Add the following line if the board needs to reduce power drain and increase performance by disabling the HDMI port
 hdmi_blanking=1
 
 # How much memory in MB to assign to the GPU on Pi models having
