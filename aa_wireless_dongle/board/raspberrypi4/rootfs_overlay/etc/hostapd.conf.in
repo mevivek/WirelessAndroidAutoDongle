@@ -1,5 +1,3 @@
-country_code=IN
-
 ctrl_interface=/var/run/hostapd
 interface=wlan0
 
@@ -14,4 +12,6 @@ wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 
 ssid=AAWirelessDongle
-wpa_passphrase=ConnectAAWirelessDongle
+
+#wpa_passphrase=ConnectAAWirelessDongle
+#country_code=IN

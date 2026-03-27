@@ -1,9 +1,3 @@
-# This file contains the main configuration for the hostapd service.
-
-# Country code for the regulatory domain
-country_code=IN
-
-# Control interface for hostapd
 ctrl_interface=/var/run/hostapd
 
 # Interface to listen on
@@ -33,5 +27,5 @@ rsn_pairwise=CCMP
 # SSID (network name)
 ssid=AAWirelessDongle
 
-# WPA passphrase
-wpa_passphrase=ConnectAAWirelessDongle
+#wpa_passphrase=ConnectAAWirelessDongle
+#country_code=IN
