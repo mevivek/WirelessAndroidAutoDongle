@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# Setup hostapd configuration
+#
+
+case "$1" in
+	start)
+		if [ -z "$AAWG_CONF_SOURCED" ]; then
+			echo "Source /etc/aawgd.conf"
+			. /etc/aawgd.conf
+		fi
+
+		echo "Generate hostapd configuration at /var/run/hostapd.conf"
+
+		cp /etc/hostapd.conf.in /var/run/hostapd.conf
+
+		echo >> /var/run/hostapd.conf
+
+		# Add Wifi password (sanitize to prevent config injection)
+		if [ -n "${AAWG_WIFI_PASSWORD}" ]; then
+			SANITIZED_PASSWORD=$(printf '%s' "${AAWG_WIFI_PASSWORD}" | tr -d '\n\r')
+			echo "wpa_passphrase=${SANITIZED_PASSWORD}" >> /var/run/hostapd.conf
+		fi
+
+		# Add Wifi country code if set (must be 2 uppercase letters)
+		if [ -n "${AAWG_COUNTRY_CODE}" ]; then
+			SANITIZED_CC=$(printf '%s' "${AAWG_COUNTRY_CODE}" | grep -oE '^[A-Z]{2}$')
+			if [ -n "${SANITIZED_CC}" ]; then
+				echo "country_code=${SANITIZED_CC}" >> /var/run/hostapd.conf
+			else
+				echo "WARNING: Invalid country code '${AAWG_COUNTRY_CODE}', skipping"
+			fi
+		fi
+
+		# Override WiFi channel if configured (default: 6)
+		if [ -n "${AAWG_WIFI_CHANNEL}" ]; then
+			sed -i "s/^channel=.*/channel=${AAWG_WIFI_CHANNEL}/" /var/run/hostapd.conf
+		fi
+
+		# Enable hidden SSID if configured
+		if [ "${AAWG_WIFI_HIDDEN}" = "1" ]; then
+			echo "ignore_broadcast_ssid=1" >> /var/run/hostapd.conf
+		fi
+		;;
+	*)
+		echo "Usage: $0 {start}"
+		exit 1
+esac
+
+exit $?

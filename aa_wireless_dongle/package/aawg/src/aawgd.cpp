@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
+#include <signal.h>
+#include <atomic>
 
 #include "common.h"
 #include "bluetoothHandler.h"
@@ -7,8 +9,23 @@
 #include "uevent.h"
 #include "usb.h"
 
+static std::atomic<bool> g_running{true};
+
+static void signal_handler(int signal) {
+    Logger::instance()->info("Received signal %d, shutting down\n", signal);
+    g_running = false;
+}
+
 int main(void) {
     Logger::instance()->info("AA Wireless Dongle\n");
+
+    // Setup signal handlers for graceful shutdown
+    struct sigaction sa;
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
 
     // Global init
     std::optional<std::thread> ueventThread =  UeventMonitor::instance().start();
@@ -20,7 +37,7 @@ int main(void) {
         BluetoothHandler::instance().powerOn();
     }
 
-    while (true) {
+    while (g_running) {
         Logger::instance()->info("Connection Strategy: %d\n", connectionStrategy);
 
         // Per connection setup and processing
@@ -57,7 +74,11 @@ int main(void) {
         }
     }
 
-    ueventThread->join();
+    Logger::instance()->info("AA Wireless Dongle shutting down\n");
+
+    if (ueventThread) {
+        ueventThread->join();
+    }
 
     return 0;
 }
