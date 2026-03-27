@@ -12,7 +12,7 @@ case "$1" in
 	start)
 		if [ -z "$AAWG_CONF_SOURCED" ]; then
 			echo "Source /etc/aawgd.conf"
-			source /etc/aawgd.conf
+			. /etc/aawgd.conf
 		fi
 
 		printf "Starting $DAEMON: "

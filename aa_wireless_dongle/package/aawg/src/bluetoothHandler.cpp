@@ -87,7 +87,7 @@ void BluetoothHandler::initAdapter() {
     }
 
     if (adapter_path.empty()) {
-        Logger::instance()->info("Did not find any bluetooth adapters\n");
+        Logger::instance()->warn("Did not find any bluetooth adapters\n");
     }
     else {
         m_adapter = BluezAdapterProxy::create(m_connection, adapter_path);
@@ -125,7 +125,7 @@ void BluetoothHandler::exportProfiles() {
     // Register AA Wireless Profile
     m_aawProfile = AAWirelessProfile::create(AAWG_PROFILE_OBJECT_PATH);
     if (m_connection->register_object(m_aawProfile, DBus::ThreadForCalling::DispatcherThread) != DBus::RegistrationStatus::Success) {
-        Logger::instance()->info("Failed to register AA Wireless profile\n");
+        Logger::instance()->error("Failed to register AA Wireless profile\n");
     }
 
     registerProfile(AAWG_PROFILE_OBJECT_PATH, AAWG_PROFILE_UUID, {
@@ -139,7 +139,7 @@ void BluetoothHandler::exportProfiles() {
         // Register HSP Handset profile
         m_hspProfile = HSPHSProfile::create(HSP_HS_PROFILE_OBJECT_PATH);
         if (m_connection->register_object(m_hspProfile, DBus::ThreadForCalling::DispatcherThread) != DBus::RegistrationStatus::Success) {
-            Logger::instance()->info("Failed to register HSP Handset profile\n");
+            Logger::instance()->error("Failed to register HSP Handset profile\n");
         }
         registerProfile(HSP_HS_PROFILE_OBJECT_PATH, HSP_HS_UUID, {
             {"Name", DBus::Variant("HSP HS")},
@@ -162,7 +162,7 @@ void BluetoothHandler::startAdvertising() {
     m_leAdvertisement->localName->set_value(m_adapterAlias);
 
     if (m_connection->register_object(m_leAdvertisement, DBus::ThreadForCalling::DispatcherThread) != DBus::RegistrationStatus::Success) {
-        Logger::instance()->info("Failed to register BLE Advertisement\n");
+        Logger::instance()->error("Failed to register BLE Advertisement\n");
     }
 
     (*m_adapter->registerAdvertisement)(LE_ADVERTISEMENT_OBJECT_PATH, {});
@@ -193,7 +193,7 @@ void BluetoothHandler::connectDevice() {
     }
 
     if (!device_paths.size()) {
-        Logger::instance()->info("Did not find any connected bluetooth device\n");
+        Logger::instance()->warn("Did not find any connected bluetooth device\n");
         return;
     }
 
@@ -222,26 +222,37 @@ void BluetoothHandler::connectDevice() {
             }
         } catch (DBus::Error& e) {
             if (!isDongleMode) {
-                Logger::instance()->info("Failed to connect device at path: %s\n", device_path.c_str());
+                Logger::instance()->warn("Failed to connect device at path: %s\n", device_path.c_str());
             }
         }
     }
 
     if (!isDongleMode) {
-        Logger::instance()->info("Failed to connect to any known bluetooth device\n");
+        Logger::instance()->warn("Failed to connect to any known bluetooth device\n");
     }
 }
 
 // Retry connection loop for Bluetooth devices
 void BluetoothHandler::retryConnectLoop() {
     bool should_exit = false;
-    std::future<void> connectWithRetryFuture = connectWithRetryPromise->get_future();
+    std::shared_ptr<std::promise<void>> promise;
+    {
+        std::lock_guard<std::mutex> lock(m_connectMutex);
+        promise = connectWithRetryPromise;
+    }
+
+    if (!promise) {
+        return;
+    }
+
+    std::future<void> connectWithRetryFuture = promise->get_future();
 
     while (!should_exit) {
         connectDevice();
 
         if (connectWithRetryFuture.wait_for(std::chrono::seconds(20)) == std::future_status::ready) {
             should_exit = true;
+            std::lock_guard<std::mutex> lock(m_connectMutex);
             connectWithRetryPromise = nullptr;
         }
     }
@@ -287,12 +298,16 @@ std::optional<std::thread> BluetoothHandler::connectWithRetry() {
         return std::nullopt;
     }
 
-    connectWithRetryPromise = std::make_shared<std::promise<void>>();
+    {
+        std::lock_guard<std::mutex> lock(m_connectMutex);
+        connectWithRetryPromise = std::make_shared<std::promise<void>>();
+    }
     return std::thread(&BluetoothHandler::retryConnectLoop, this);
 }
 
 // Stop the retry connection loop
 void BluetoothHandler::stopConnectWithRetry() {
+    std::lock_guard<std::mutex> lock(m_connectMutex);
     if (connectWithRetryPromise) {
         connectWithRetryPromise->set_value();
     }

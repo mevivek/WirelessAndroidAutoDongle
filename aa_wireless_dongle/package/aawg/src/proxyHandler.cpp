@@ -46,7 +46,15 @@ ssize_t AAWProxy::readMessage(int fd, unsigned char *buffer, size_t buffer_len) 
         return len;
     }
 
-    size_t message_length = (buffer[2] << 8) + buffer[3];
+    size_t message_length = ((size_t)buffer[2] << 8) + buffer[3];
+
+    // Sanity check: reject unreasonably large messages (max 1 MB)
+    constexpr size_t MAX_MESSAGE_LENGTH = 1024 * 1024;
+    if (message_length > MAX_MESSAGE_LENGTH) {
+        Logger::instance()->info("Message length %zu exceeds maximum allowed size\n", message_length);
+        errno = EMSGSIZE;
+        return -1;
+    }
 
     constexpr char FRAME_TYPE_FIRST = 1 << 0;
     constexpr char FRAME_TYPE_LAST = 1 << 1;
@@ -110,7 +118,7 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
         }
 
         if (len < 0) {
-            Logger::instance()->info("Read from %s failed: %s\n", read_name.c_str(), strerror(errno));
+            Logger::instance()->error("Read from %s failed: %s\n", read_name.c_str(), strerror(errno));
             break;
         }
         else if (len == 0) {
@@ -132,7 +140,7 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
         }
 
         if (wlen < 0) {
-            Logger::instance()->info("Write to %s failed: %s\n", write_name.c_str(), strerror(errno));
+            Logger::instance()->error("Write to %s failed: %s\n", write_name.c_str(), strerror(errno));
             break;
         }
         else if (should_exit) {
@@ -157,13 +165,25 @@ void AAWProxy::stopForwarding(std::atomic<bool>& should_exit) {
     }
 }
 
+// Helper to clean up file descriptors on early exit or normal completion
+void AAWProxy::cleanup() {
+    if (m_usb_fd >= 0) {
+        close(m_usb_fd);
+        m_usb_fd = -1;
+    }
+    if (m_tcp_fd >= 0) {
+        close(m_tcp_fd);
+        m_tcp_fd = -1;
+    }
+}
+
 // Handle client connection
 void AAWProxy::handleClient(int server_sock) {
     struct sockaddr client_address;
     socklen_t client_addresslen = sizeof(client_address);
     if ((m_tcp_fd = accept(server_sock, &client_address, &client_addresslen)) < 0) {
         close(server_sock);
-        Logger::instance()->info("accept failed: %s\n", strerror(errno));
+        Logger::instance()->error("accept failed: %s\n", strerror(errno));
         return;
     }
 
@@ -176,13 +196,15 @@ void AAWProxy::handleClient(int server_sock) {
 
     if (Config::instance()->getConnectionStrategy() != ConnectionStrategy::USB_FIRST) {
         if (!UsbManager::instance().enableDefaultAndWaitForAccessory(std::chrono::seconds(30))) {
+            cleanup();
             return;
         }
     }
 
     Logger::instance()->info("Opening usb accessory\n");
     if ((m_usb_fd = open("/dev/usb_accessory", O_RDWR)) < 0) {
-        Logger::instance()->info("error opening /dev/usb_accessory: %s\n", strerror(errno));
+        Logger::instance()->error("error opening /dev/usb_accessory: %s\n", strerror(errno));
+        cleanup();
         return;
     }
 
@@ -194,6 +216,7 @@ void AAWProxy::handleClient(int server_sock) {
 
     if (setsockopt(m_tcp_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv))) {
         Logger::instance()->info("setsockopt failed: %s\n", strerror(errno));
+        cleanup();
         return;
     }
 
@@ -219,11 +242,7 @@ void AAWProxy::handleClient(int server_sock) {
 
     signal(SIGUSR1, SIG_DFL);
 
-    close(m_usb_fd);
-    m_usb_fd = -1;
-
-    close(m_tcp_fd);
-    m_tcp_fd = -1;
+    cleanup();
 
     Logger::instance()->info("Forwarding stopped\n");
 }
@@ -233,13 +252,14 @@ std::optional<std::thread> AAWProxy::startServer(int32_t port) {
     Logger::instance()->info("Starting tcp server\n");
     int server_sock;
     if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        Logger::instance()->info("creating socket failed: %s\n", strerror(errno));
+        Logger::instance()->error("creating socket failed: %s\n", strerror(errno));
         return std::nullopt;
     }
 
     int opt = 1;
     if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
         Logger::instance()->info("setsockopt failed: %s\n", strerror(errno));
+        close(server_sock);
         return std::nullopt;
     }
 
@@ -250,11 +270,13 @@ std::optional<std::thread> AAWProxy::startServer(int32_t port) {
 
     if (bind(server_sock, (struct sockaddr*)&address, sizeof(address)) < 0) {
         Logger::instance()->info("bind failed: %s\n", strerror(errno));
+        close(server_sock);
         return std::nullopt;
     }
 
     if (listen(server_sock, 3) < 0) {
         Logger::instance()->info("listen failed: %s\n", strerror(errno));
+        close(server_sock);
         return std::nullopt;
     }
 

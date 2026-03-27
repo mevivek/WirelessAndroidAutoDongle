@@ -17,6 +17,7 @@ private:
     void handleClient(int server_fd);
     void forward(ProxyDirection direction, std::atomic<bool>& should_exit);
     void stopForwarding(std::atomic<bool>& should_exit);
+    void cleanup();
 
     ssize_t readFully(int fd, unsigned char *buf, size_t nbyte);
     ssize_t readMessage(int fd, unsigned char *buf, size_t nbyte);

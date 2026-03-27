@@ -3,10 +3,15 @@
 # Configure USB gadget interfaces
 #
 
-# Set the serial number for the USB gadget
-SERIAL_NUMBER="0123456"
+# Generate unique serial from device serial number, fallback to default
+if [ -f /sys/firmware/devicetree/base/serial-number ]; then
+	SERIAL_NUMBER=$(cat /sys/firmware/devicetree/base/serial-number | tr -d '\0')
+else
+	SERIAL_NUMBER="0123456"
+fi
+
 # Set the manufacturer name for the USB gadget
-MANUFACTURER="My Own"
+MANUFACTURER="AA Wireless"
 # Set the product name for the USB gadget
 PRODUCT="AA Wireless Dongle"
 
@@ -61,7 +66,6 @@ start() {
 		ln -s functions/ffs.mtp configs/c.1
 	fi
 
-	# Setting up usb_gadget:
 	echo "OK"
 
 	# Start the USB gadget daemon
@@ -82,20 +86,18 @@ stop() {
 	echo "" > "$ACCESSORY_GADGET_NAME"/UDC
 	echo "" > "$DEFAULT_GADGET_NAME"/UDC
 
-	# Disable usb_gadget:
 	echo "OK"
 
 	# Stop the USB gadget daemon
 	printf "Stopping $DAEMON: "
 	start-stop-daemon -K -q -s 9 -p "$PIDFILE"
 	RETVAL=$?
-	umount "$FUNCTIONFS_PATH"
-	rm -r "$FUNCTIONFS_PATH"
+	umount -l "$FUNCTIONFS_PATH" 2>/dev/null
+	rm -rf "$FUNCTIONFS_PATH"
 	[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
 }
 
 restart() {
-	# Restart the USB gadget setup process
 	stop
 	sleep 1
 	start

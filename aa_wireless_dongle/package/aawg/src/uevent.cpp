@@ -20,7 +20,7 @@ void UeventMonitor::monitorLoop(int nl_socket) {
         ssize_t len = read(nl_socket, msg, NETLINK_MSG_SIZE);
 
         if (len < 0) {
-            Logger::instance()->info("Read from netlink socket failed: %s\n", strerror(errno));
+            Logger::instance()->error("Read from netlink socket failed: %s\n", strerror(errno));
             continue;
         }
         else if (len == 0) {
@@ -65,7 +65,7 @@ std::optional<std::thread> UeventMonitor::start() {
 
     int nl_sock;
     if ((nl_sock = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_KOBJECT_UEVENT)) < 0) {
-        Logger::instance()->info("creating socket failed for netlink socket: %s\n", strerror(errno));
+        Logger::instance()->error("creating socket failed for netlink socket: %s\n", strerror(errno));
         return std::nullopt;
     }
 
@@ -76,13 +76,13 @@ std::optional<std::thread> UeventMonitor::start() {
     };
 
     if (bind(nl_sock, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        Logger::instance()->info("bind failed for netlink socket: %s\n", strerror(errno));
+        Logger::instance()->error("bind failed for netlink socket: %s\n", strerror(errno));
         return std::nullopt;
     }
 
     int opt = 1;
     if (setsockopt(nl_sock, SOL_SOCKET, SO_PASSCRED, &opt, sizeof(opt))) {
-        Logger::instance()->info("setsockopt failed to set SO_PASSCRED for netlink socket: %s\n", strerror(errno));
+        Logger::instance()->error("setsockopt failed to set SO_PASSCRED for netlink socket: %s\n", strerror(errno));
         return std::nullopt;
     }
 

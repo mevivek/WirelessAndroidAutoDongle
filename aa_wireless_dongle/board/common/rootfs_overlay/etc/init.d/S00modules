@@ -6,8 +6,8 @@
 case "$1" in
 	start)
 		echo "Loading kernel modules..."
-		modprobe -a brcmfmac hci_uart # Wireless drivers
-		modprobe -a dwc2 libcomposite # USB gadget drivers
+		modprobe -a brcmfmac hci_uart || echo "WARNING: Failed to load wireless drivers"
+		modprobe -a dwc2 libcomposite || echo "WARNING: Failed to load USB gadget drivers"
 		;;
 	*)
 		echo "Usage: $0 {start}"
