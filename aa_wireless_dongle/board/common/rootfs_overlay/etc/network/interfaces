@@ -1,31 +1,25 @@
-# This file contains the network interface configuration for the system.
-
-# Loopback interface configuration
 auto lo
 iface lo inet loopback
 
-# Ethernet interface configuration (commented out)
 #auto eth0
 #iface eth0 inet dhcp
 #  hostname $(hostname)
 
-# USB interface configuration (commented out)
 #auto usb0
 #iface usb0 inet dhcp
 #  hostname $(hostname)
 
-# Wireless interface configuration
 auto wlan0
 iface wlan0 inet static
   address 10.0.0.1
   netmask 255.255.255.0
-  pre-up hostapd -B /etc/hostapd.conf -t -f /var/log/hostapd
+  pre-up hostapd -B /var/run/hostapd.conf -t -f /var/log/hostapd
   #post-up dnsmasq
   #pre-down killall -q dnsmasq
   post-down killall -q hostapd
 
-# Wireless interface configuration for DHCP (commented out)
 #auto wlan0
 #iface wlan0 inet dhcp
 #  pre-up wpa_supplicant -D nl80211 -i wlan0 -c /etc/wpa_supplicant.conf -B
 #  post-down killall -q wpa_supplicant
+

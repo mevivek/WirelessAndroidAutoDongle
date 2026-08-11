@@ -6,6 +6,7 @@
 DAEMON="bt-agent"
 PIDFILE="/var/run/$DAEMON.pid"
 
+
 RETVAL=0
 
 case "$1" in

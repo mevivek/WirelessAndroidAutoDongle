@@ -14,13 +14,13 @@ These files define the `BLEAdvertisement` class, which is responsible for managi
 This file contains common definitions and constants used by the Bluetooth-related classes.
 
 ### `bluetoothHandler.cpp` and `bluetoothHandler.h`
-These files define the `BluetoothHandler` class, which is responsible for managing Bluetooth connections. It initializes the Bluetooth adapter, sets its power and pairable state, exports Bluetooth profiles, and handles Bluetooth device connections. It also manages Bluetooth Low Energy (BLE) advertisements.
+These files define the `BluetoothHandler` class, which is responsible for managing Bluetooth connections. It initializes the Bluetooth adapter, sets its power and pairable state, exports Bluetooth profiles, and handles Bluetooth device connections. It also manages Bluetooth Low Energy (BLE) advertisements. The adapter alias is built by appending a per-device unique suffix to a prefix, so multiple dongles are distinguishable.
 
 ### `bluetoothProfiles.cpp` and `bluetoothProfiles.h`
 These files define the `AAWirelessProfile` and `HSPHSProfile` classes, which represent Bluetooth profiles used by the Wireless Android Auto Dongle.
 
 ### `common.cpp` and `common.h`
-These files define the `Config` class, which is responsible for managing configuration settings. It provides methods to retrieve environment variables, get the MAC address of a network interface, and obtain WiFi information. It also determines the connection strategy based on environment variables.
+These files define the `Config` class, which is responsible for managing configuration settings, and the `Logger` class. `Config` reads the `AAWG_*` environment variables exported from `/etc/aawgd.conf` during boot. It provides methods to get the MAC address of a network interface, obtain WiFi information, determine the connection strategy, and compute the unique name suffix (from `AAWG_UNIQUE_NAME_SUFFIX` when set, otherwise derived from the board's device tree serial number).
 
 ### `proxyHandler.cpp` and `proxyHandler.h`
 These files define the `AAWProxy` class, which is responsible for forwarding data between the TCP and USB connections. It sets up a TCP server, accepts client connections, and forwards data between the TCP and USB endpoints. It also handles the termination of forwarding when needed.
