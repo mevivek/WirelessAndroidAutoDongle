@@ -1,5 +1,7 @@
 #include <dirent.h>
+#include <errno.h>
 #include <string.h>
+#include <atomic>
 #include <future>
 
 #include "common.h"
@@ -49,28 +51,58 @@ UsbManager::UsbManager() {
     }
 }
 
-void UsbManager::writeGadgetFile(std::string gadgetName, std::string relativeFilePath, const char* content) {
+int UsbManager::writeGadgetFile(std::string gadgetName, std::string relativeFilePath, const char* content) {
     std::string gadgetFilePath = "/sys/kernel/config/usb_gadget/" + gadgetName + "/" + relativeFilePath;
     FILE* gadgetFile = fopen(gadgetFilePath.c_str(), "w");
-    fputs(content, gadgetFile);
-    fputc('\n', gadgetFile);
-    fclose(gadgetFile);
+    if (gadgetFile == NULL) {
+        int error = errno;
+        Logger::instance()->info("USB Manager: Error opening %s: %s\n", gadgetFilePath.c_str(), strerror(error));
+        return error ? error : EIO;
+    }
+
+    int error = 0;
+    if (fputs(content, gadgetFile) == EOF || fputc('\n', gadgetFile) == EOF) {
+        error = errno ? errno : EIO;
+    }
+    if (fclose(gadgetFile) != 0 && error == 0) {
+        error = errno ? errno : EIO;
+    }
+
+    return error;
 }
 
-void UsbManager::enableGadget(std::string gadgetName) {
-    writeGadgetFile(gadgetName, "UDC", s_udcName.c_str());
+bool UsbManager::enableGadget(std::string gadgetName) {
+    if (s_udcName.empty()) {
+        Logger::instance()->info("USB Manager: Cannot bind gadget %s, no UDC was found\n", gadgetName.c_str());
+        return false;
+    }
+
+    int error = writeGadgetFile(gadgetName, "UDC", s_udcName.c_str());
+    if (error != 0) {
+        Logger::instance()->info("USB Manager: Error binding gadget %s to UDC %s: %s\n", gadgetName.c_str(), s_udcName.c_str(), strerror(error));
+        return false;
+    }
+
+    return true;
 }
 
-void UsbManager::disableGadget(std::string gadgetName) {
-    writeGadgetFile(gadgetName, "UDC", "");
+bool UsbManager::disableGadget(std::string gadgetName) {
+    int error = writeGadgetFile(gadgetName, "UDC", "");
+    // The kernel reports a gadget that is not bound to any UDC as ENODEV, which is not a failure here.
+    if (error != 0 && error != ENODEV) {
+        Logger::instance()->info("USB Manager: Error unbinding gadget %s from UDC: %s\n", gadgetName.c_str(), strerror(error));
+        return false;
+    }
+
+    return true;
 }
 
 void UsbManager::switchToAccessoryGadget() {
     disableGadget(defaultGadgetName);
     std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 0.1 second, keep the gadget disabled for a short time to let the host recognize the change
-    enableGadget(accessoryGadgetName);
-
-    Logger::instance()->info("USB Manager: Switched to accessory gadget from default\n");
+    if (enableGadget(accessoryGadgetName)) {
+        Logger::instance()->info("USB Manager: Switched to accessory gadget from default\n");
+    }
 }
 
 void UsbManager::disableGadget() {
@@ -83,8 +115,10 @@ void UsbManager::disableGadget() {
 bool UsbManager::enableDefaultAndWaitForAccessory(std::chrono::milliseconds timeout) {
     std::shared_ptr<std::promise<void>> accessoryPromise = std::make_shared<std::promise<void>>();
     std::weak_ptr<std::promise<void>> accessoryPromiseWeak = accessoryPromise;
+    std::shared_ptr<std::atomic<bool>> accessoryWanted = std::make_shared<std::atomic<bool>>(true);
+    std::future<void> accessoryFuture = accessoryPromise->get_future();
 
-    UeventMonitor::instance().addHandler([accessoryPromiseWeak](UeventEnv env) {
+    UeventMonitor::instance().addHandler([accessoryPromiseWeak, accessoryWanted](UeventEnv env) {
         std::shared_ptr<std::promise<void>> accessoryPromise = accessoryPromiseWeak.lock();
 
         // If the promise is no longer active, nothing to do.
@@ -100,6 +134,11 @@ bool UsbManager::enableDefaultAndWaitForAccessory(std::chrono::milliseconds time
             return false;
         }
 
+        // The request may have been abandoned while this event was in flight.
+        if (!accessoryWanted->exchange(false)) {
+            return true;
+        }
+
         // Got an accessory start event
         Logger::instance()->info("USB Manager: Received accessory start request\n");
         UsbManager::instance().switchToAccessoryGadget();
@@ -108,17 +147,24 @@ bool UsbManager::enableDefaultAndWaitForAccessory(std::chrono::milliseconds time
         return true;
     });
 
-    enableGadget(defaultGadgetName);
+    if (!enableGadget(defaultGadgetName)) {
+        accessoryWanted->store(false);
+        return false;
+    }
 
     Logger::instance()->info("USB Manager: Enabled default gadget\n");
 
     if (timeout == std::chrono::milliseconds(0)) {
-        accessoryPromise->get_future().wait();
+        accessoryFuture.wait();
         return true;
     } else {
-        std::future_status status = accessoryPromise->get_future().wait_for(timeout);
+        std::future_status status = accessoryFuture.wait_for(timeout);
 
         if (status == std::future_status::ready) {
+            return true;
+        } else if (!accessoryWanted->exchange(false)) {
+            // The handler claimed the request just as the wait timed out, let it finish.
+            accessoryFuture.wait();
             return true;
         } else {
             Logger::instance()->info("USB Manager: Timeout waiting for accessory start request\n");
