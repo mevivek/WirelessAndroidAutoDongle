@@ -2,7 +2,11 @@
 #include <thread>
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstdint>
+#include <string.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 
 #include "common.h"
 #include "bluetoothHandler.h"
@@ -34,7 +38,22 @@ public:
         int fd_flags = fcntl(m_fd, F_GETFL);
         fcntl(m_fd, F_SETFL, fd_flags & ~O_NONBLOCK);
 
+        // This runs on the dbus dispatcher thread, an untimed read here would block all bluetooth activity
+        struct timeval tv = {
+            .tv_sec = 10,
+            .tv_usec = 0,
+        };
+
+        if (setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv))) {
+            Logger::instance()->info("setsockopt failed: %s\n", strerror(errno));
+        }
+
         WifiInfo wifiInfo = Config::instance()->getWifiInfo();
+
+        if (wifiInfo.key.empty()) {
+            Logger::instance()->info("No wifi passphrase is configured, not sending wifi credentials\n");
+            return;
+        }
 
         Logger::instance()->info("Sending WifiStartRequest (ip: %s, port: %d)\n", wifiInfo.ipAddress.c_str(), wifiInfo.port);
         WifiStartRequest wifiStartRequest;
@@ -46,7 +65,7 @@ public:
         MessageId messageId = ReadMessage();
 
         if (messageId != MessageId::WifiInfoRequest) {
-            Logger::instance()->info("Expected WifiInfoRequest, got %s (%d). Abort.\n", MessageName(messageId), messageId);
+            Logger::instance()->info("Expected WifiInfoRequest, got %s (%d). Abort.\n", MessageName(messageId).c_str(), messageId);
             return;
         }
 
@@ -60,7 +79,9 @@ public:
 
         SendMessage(MessageId::WifiInfoResponse, &wifiInfoResponse);
 
-        ReadMessage();
+        if (ReadMessage() == MessageId::Invalid) {
+            return;
+        }
         ReadMessage();
     }
 
@@ -97,26 +118,31 @@ private:
     }
 
     void SendMessage(MessageId messageId, google::protobuf::MessageLite* message) {
-        uint16_t messageSize = (uint16_t)message->ByteSizeLong();
-        uint16_t length = messageSize + 4;
+        size_t messageSize = message->ByteSizeLong();
+        if (messageSize > UINT16_MAX) {
+            Logger::instance()->info("Cannot send %s, message size %zu does not fit the protocol length field\n", MessageName(messageId).c_str(), messageSize);
+            return;
+        }
+
+        size_t length = messageSize + 4;
 
         unsigned char* buffer = new unsigned char[length];
 
         uint16_t networkShort = 0;
-        networkShort = htons(messageSize);
+        networkShort = htons(static_cast<uint16_t>(messageSize));
         memcpy(buffer, &networkShort, sizeof(networkShort));
 
         networkShort = htons(static_cast<uint16_t>(messageId));
         memcpy(buffer + 2, &networkShort, sizeof(networkShort));
 
-        message->SerializeToArray(buffer + 4, messageSize);
+        message->SerializeToArray(buffer + 4, static_cast<int>(messageSize));
 
         ssize_t wrote = write(m_fd, buffer, length);
         if (wrote < 0) {
             Logger::instance()->info("Error sending %s, messageId: %d\n", MessageName(messageId).c_str(), messageId);
         }
         else {
-            Logger::instance()->info("Sent %s, messageId: %d, wrote %d bytes\n", MessageName(messageId).c_str(), messageId, wrote);
+            Logger::instance()->info("Sent %s, messageId: %d, wrote %zd bytes\n", MessageName(messageId).c_str(), messageId, wrote);
         }
 
         delete[] buffer;
@@ -129,7 +155,7 @@ private:
         readBytes = read(m_fd, &networkShort, 2);
         if (readBytes != 2) {
             // Could not read 2 bytes. Do something.
-            Logger::instance()->info("Error reading length, read bytes: %d, errno: %s\n", readBytes, strerror(errno));
+            Logger::instance()->info("Error reading length, read bytes: %zd, errno: %s\n", readBytes, strerror(errno));
             return MessageId::Invalid;
         }
         uint16_t length = ntohs(networkShort);
@@ -137,7 +163,7 @@ private:
         readBytes = read(m_fd, &networkShort, 2);
         if (readBytes != 2) {
             // Could not read 2 bytes. Do something.
-            Logger::instance()->info("Error reading message id, read bytes: %d, errno: %s\n", readBytes, strerror(errno));
+            Logger::instance()->info("Error reading message id, read bytes: %zd, errno: %s\n", readBytes, strerror(errno));
             return MessageId::Invalid;
         }
         MessageId messageId = static_cast<MessageId>(ntohs(networkShort));
@@ -164,6 +190,12 @@ void AAWirelessProfile::Release() {
 void AAWirelessProfile::NewConnection(DBus::Path path, std::shared_ptr<DBus::FileDescriptor> fd, DBus::Properties fdProperties) {
     Logger::instance()->info("AA Wireless NewConnection\n");
     Logger::instance()->info("Path: %s, fd: %d\n", path.c_str(), fd->descriptor());
+
+    if (!BluetoothHandler::instance().isDevicePaired(path)) {
+        Logger::instance()->info("Device at path %s is not paired, refusing to send wifi credentials\n", path.c_str());
+        close(fd->descriptor());
+        return;
+    }
 
     AAWirelessLauncher(fd->descriptor()).launch();
     Logger::instance()->info("Bluetooth launch sequence completed\n");

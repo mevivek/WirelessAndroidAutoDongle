@@ -10,6 +10,7 @@
 #include <optional>
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "common.h"
 #include "usb.h"
@@ -20,13 +21,28 @@ void empty_signal_handler(int signal) {
     // Empty. We don't want to do anything but interrupt the thread.
 }
 
+AAWProxy::~AAWProxy() {
+    if (m_usb_fd >= 0) {
+        close(m_usb_fd);
+    }
+
+    if (m_tcp_fd >= 0) {
+        close(m_tcp_fd);
+    }
+}
+
 ssize_t AAWProxy::readFully(int fd, unsigned char *buffer, size_t nbyte) {
     size_t remaining_bytes = nbyte;
     while (remaining_bytes > 0) {
         ssize_t len = read(fd, buffer, remaining_bytes);
 
         if (len <= 0) {
-            // Error, cannot read more.
+            // Error, cannot read more. Whatever was read is a partial message and cannot be recovered.
+            if (remaining_bytes < nbyte) {
+                int saved_errno = errno;
+                Logger::instance()->info("Discarding %zu bytes of a partially read message\n", nbyte - remaining_bytes);
+                errno = saved_errno;
+            }
             return len;
         }
 
@@ -54,6 +70,7 @@ ssize_t AAWProxy::readMessage(int fd, unsigned char *buffer, size_t buffer_len) 
 
     if ((header_length + message_length) > buffer_len) {
         // Not enough space in the buffer. This is unexpected.
+        Logger::instance()->info("Message of %zu bytes does not fit in the %zu byte buffer\n", header_length + message_length, buffer_len);
         errno = EMSGSIZE;
         return -1;
     }
@@ -66,11 +83,14 @@ ssize_t AAWProxy::readMessage(int fd, unsigned char *buffer, size_t buffer_len) 
 }
 
 void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit) {
-    size_t buffer_len = 16384;
-    unsigned char buffer[buffer_len];
+    // The largest frame the protocol can describe: 4 byte header, 4 more for a first frame,
+    // and a 16 bit payload length.
+    constexpr size_t buffer_len = 4 + 4 + 65535;
+    std::vector<unsigned char> buffer(buffer_len);
 
     bool read_message;
     int read_fd, write_fd;
+    pthread_t* self_pthread;
     std::string read_name, write_name;
     switch (direction) {
         case ProxyDirection::TCP_to_USB:
@@ -81,6 +101,8 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
 
             write_fd = m_usb_fd;
             write_name = "USB";
+
+            self_pthread = &m_tcp_usb_pthread;
             break;
         case ProxyDirection::USB_to_TCP:
             read_message = false;
@@ -90,19 +112,26 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
 
             write_fd = m_tcp_fd;
             write_name = "TCP";
+
+            self_pthread = &m_usb_tcp_pthread;
             break;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_forward_threads_mutex);
+        *self_pthread = pthread_self();
     }
 
     while (!should_exit) {
         // Read
-        ssize_t len = read_message ? readMessage(read_fd, buffer, buffer_len) : read(read_fd, buffer, buffer_len);
+        ssize_t len = read_message ? readMessage(read_fd, buffer.data(), buffer_len) : read(read_fd, buffer.data(), buffer_len);
 
         if (len <= 0) {
             // Start logging read/write details if there is an error.
             m_log_communication = true;
         }
         if (m_log_communication) {
-            Logger::instance()->info("%d bytes read from %s\n", len, read_name.c_str());
+            Logger::instance()->info("%zd bytes read from %s\n", len, read_name.c_str());
         }
 
         if (len < 0) {
@@ -117,14 +146,14 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
         }
 
         // Write
-        ssize_t wlen = write(write_fd, buffer, len);
+        ssize_t wlen = write(write_fd, buffer.data(), len);
 
         if (wlen <= 0) {
             // Start logging read/write details if there is an error.
             m_log_communication = true;
         }
         if (m_log_communication) {
-            Logger::instance()->info("%d bytes written to %s\n", wlen, write_name.c_str());
+            Logger::instance()->info("%zd bytes written to %s\n", wlen, write_name.c_str());
         }
 
         if (wlen < 0) {
@@ -137,18 +166,25 @@ void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit)
     }
 
     stopForwarding(should_exit);
+
+    {
+        std::lock_guard<std::mutex> lock(m_forward_threads_mutex);
+        *self_pthread = 0;
+    }
 }
 
 void AAWProxy::stopForwarding(std::atomic<bool>& should_exit) {
     Logger::instance()->info("Interrupting threads to stop forwarding\n");
     should_exit = true;
 
-    if (m_usb_tcp_thread) {
-        pthread_kill(m_usb_tcp_thread->native_handle(), SIGUSR1);
+    std::lock_guard<std::mutex> lock(m_forward_threads_mutex);
+
+    if (m_usb_tcp_pthread) {
+        pthread_kill(m_usb_tcp_pthread, SIGUSR1);
     }
 
-    if (m_tcp_usb_thread) {
-        pthread_kill(m_tcp_usb_thread->native_handle(), SIGUSR1);
+    if (m_tcp_usb_pthread) {
+        pthread_kill(m_tcp_usb_pthread, SIGUSR1);
     }
 }
 
@@ -170,6 +206,9 @@ void AAWProxy::handleClient(int server_sock) {
 
     if (Config::instance()->getConnectionStrategy() != ConnectionStrategy::USB_FIRST) {
         if (!UsbManager::instance().enableDefaultAndWaitForAccessory(std::chrono::seconds(30))) {
+            // Close the connection right away so that the phone can retry instead of stalling
+            close(m_tcp_fd);
+            m_tcp_fd = -1;
             return;
         }
     }
@@ -233,6 +272,7 @@ std::optional<std::thread> AAWProxy::startServer(int32_t port) {
     int opt = 1;
     if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
         Logger::instance()->info("setsockopt failed: %s\n", strerror(errno));
+        close(server_sock);
         return std::nullopt;
     }
 
@@ -243,11 +283,13 @@ std::optional<std::thread> AAWProxy::startServer(int32_t port) {
 
     if (bind(server_sock, (struct sockaddr*)&address, sizeof(address)) < 0) {
         Logger::instance()->info("bind failed: %s\n", strerror(errno));
+        close(server_sock);
         return std::nullopt;
     }
 
     if (listen(server_sock, 3) < 0) {
         Logger::instance()->info("listen failed: %s\n", strerror(errno));
+        close(server_sock);
         return std::nullopt;
     }
 

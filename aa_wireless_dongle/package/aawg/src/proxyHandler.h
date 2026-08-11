@@ -1,11 +1,15 @@
 #pragma once
 
+#include <pthread.h>
 #include <atomic>
+#include <mutex>
 #include <optional>
 #include <thread>
 
 class AAWProxy {
 public:
+    ~AAWProxy();
+
     std::optional<std::thread> startServer(int32_t port);
 
 private:
@@ -26,6 +30,12 @@ private:
 
     std::optional<std::thread> m_usb_tcp_thread = std::nullopt;
     std::optional<std::thread> m_tcp_usb_thread = std::nullopt;
+
+    // Each forwarding thread publishes its own handle here while it is running, so that
+    // the peer can be signalled without touching a thread that is being joined.
+    std::mutex m_forward_threads_mutex;
+    pthread_t m_usb_tcp_pthread = 0;
+    pthread_t m_tcp_usb_pthread = 0;
 
     std::atomic<bool> m_log_communication = false;
 };

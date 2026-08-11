@@ -191,7 +191,7 @@ void BluetoothHandler::connectDevice() {
 
     const bool isDongleMode = (Config::instance()->getConnectionStrategy() == ConnectionStrategy::DONGLE_MODE);
 
-    Logger::instance()->info("Found %d bluetooth devices\n", device_paths.size());
+    Logger::instance()->info("Found %zu bluetooth devices\n", device_paths.size());
 
     for (const std::string &device_path: device_paths) {
         Logger::instance()->info("Trying to connect bluetooth device at path: %s\n", device_path.c_str());
@@ -203,7 +203,23 @@ void BluetoothHandler::connectDevice() {
         std::shared_ptr<DBus::PropertyProxy<bool>> deviceConnected = bluezDevice->create_property<bool>(INTERFACE_BLUEZ_DEVICE, "Connected");
 
         try {
-            if (deviceConnected) {
+            bool isPaired = bluezDevice->create_property<bool>(INTERFACE_BLUEZ_DEVICE, "Paired")->value();
+
+            std::lock_guard<std::mutex> lock(m_pairedStateMutex);
+            m_pairedState[device_path] = isPaired;
+        } catch (DBus::Error& e) {
+            Logger::instance()->info("Failed to read the Paired property of the device at path: %s, %s\n", device_path.c_str(), e.what());
+        }
+
+        bool isConnected = false;
+        try {
+            isConnected = deviceConnected->value();
+        } catch (DBus::Error& e) {
+            Logger::instance()->info("Failed to read the Connected property of the device at path: %s, %s\n", device_path.c_str(), e.what());
+        }
+
+        try {
+            if (isConnected) {
                 Logger::instance()->info("Bluetooth device already connected, disconnecting\n");
                 disconnect();
             }
@@ -224,18 +240,33 @@ void BluetoothHandler::connectDevice() {
     }
 }
 
-void BluetoothHandler::retryConnectLoop() {
-    bool should_exit = false;
-    std::future<void> connectWithRetryFuture = connectWithRetryPromise->get_future();
+bool BluetoothHandler::isDevicePaired(const DBus::Path& path) {
+    std::lock_guard<std::mutex> lock(m_pairedStateMutex);
 
-    while (!should_exit) {
-        connectDevice();
-
-        if (connectWithRetryFuture.wait_for(std::chrono::seconds(20)) == std::future_status::ready) {
-            should_exit = true;
-            connectWithRetryPromise = nullptr;
-        }
+    auto it = m_pairedState.find(path);
+    if (it == m_pairedState.end()) {
+        // The retry thread has not looked at this device yet, which is also what a phone that
+        // was just paired looks like. Refusing the owner's phone is a worse outcome than
+        // letting an unpaired device through, so allow it and record that the check was blind.
+        Logger::instance()->info("Pairing state of the device at path %s has not been observed, allowing the connection\n", path.c_str());
+        return true;
     }
+
+    return it->second;
+}
+
+void BluetoothHandler::retryConnectLoop() {
+    std::unique_lock<std::mutex> lock(m_connectRetryMutex);
+
+    while (!m_stopRequested) {
+        lock.unlock();
+        connectDevice();
+        lock.lock();
+
+        m_connectRetryCv.wait_for(lock, std::chrono::seconds(20), [this]{ return m_stopRequested; });
+    }
+
+    lock.unlock();
 
     if (Config::instance()->getConnectionStrategy() != ConnectionStrategy::DONGLE_MODE) {
         BluetoothHandler::instance().powerOff();
@@ -270,19 +301,26 @@ void BluetoothHandler::powerOn() {
     }
 }
 
+void BluetoothHandler::prepareConnectWithRetry() {
+    std::lock_guard<std::mutex> lock(m_connectRetryMutex);
+    m_stopRequested = false;
+}
+
 std::optional<std::thread> BluetoothHandler::connectWithRetry() {
     if (!m_adapter) {
         return std::nullopt;
     }
 
-    connectWithRetryPromise = std::make_shared<std::promise<void>>();
     return std::thread(&BluetoothHandler::retryConnectLoop, this);
 }
 
 void BluetoothHandler::stopConnectWithRetry() {
-    if (connectWithRetryPromise) {
-        connectWithRetryPromise->set_value();
+    {
+        std::lock_guard<std::mutex> lock(m_connectRetryMutex);
+        m_stopRequested = true;
     }
+
+    m_connectRetryCv.notify_all();
 }
 
 void BluetoothHandler::powerOff() {
