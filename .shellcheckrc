@@ -1,0 +1,26 @@
+# ShellCheck settings for the init scripts in
+# aa_wireless_dongle/board/*/rootfs_overlay/etc/init.d.
+#
+# Those scripts run on the device under busybox ash, not bash. This file is the
+# only place that contract is recorded, so every disable below says why.
+# Run the checks with tests/run.sh.
+
+# busybox ash is POSIX sh plus a handful of bash builtins. ShellCheck has no ash
+# dialect, and sh is the closest and strictest match.
+shell=sh
+
+# The scripts source /etc/aawgd.conf and /etc/init.d/rcS_aawgd_conf, which are
+# runtime paths on the device: they do not exist relative to the source tree, so
+# ShellCheck cannot follow them and would report every one as unresolvable.
+disable=SC1090,SC1091
+
+# rcS, rcS_aawgd_conf, S39hostapd_conf and S93aawgd use the `source` builtin.
+# busybox provides it via CONFIG_ASH_BASH_COMPAT=y
+# (buildroot/package/busybox/busybox.config), which is on for every board here.
+# SC2039 is the single pre-0.8 code for the same class of construct.
+disable=SC3046,SC2039
+
+# rcS:4-5 redirect stdout and stderr into logger with process substitution. In
+# busybox that is BASH_PROCESS_SUBST, also gated on CONFIG_ASH_BASH_COMPAT. The
+# entire boot log depends on it, so it is a deliberate part of the contract.
+disable=SC3001
