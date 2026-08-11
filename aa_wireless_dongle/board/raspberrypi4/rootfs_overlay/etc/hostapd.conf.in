@@ -13,5 +13,5 @@ rsn_pairwise=CCMP
 
 ssid=AAWirelessDongle
 
-#wpa_passphrase=ConnectAAWirelessDongle
+#wpa_passphrase=
 #country_code=IN

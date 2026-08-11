@@ -5,15 +5,37 @@
 set -o allexport
 
 if [ -z "$AAWG_CONF_SOURCED" ]; then
-	echo "Source /etc/aawgd.conf"
-	source /etc/aawgd.conf
+	# Never source a file the shell cannot parse, it would abort the whole boot
+	if [ -r /etc/aawgd.conf ] && /bin/sh -n /etc/aawgd.conf; then
+		echo "Source /etc/aawgd.conf"
+		source /etc/aawgd.conf
+	else
+		echo "WARNING: /etc/aawgd.conf is missing or is not valid shell, ignoring it and using defaults" >&2
+	fi
 	export AAWG_CONF_SOURCED=1
 fi
 
 
 ## Setup Wifi password
+if [ -n "${AAWG_WIFI_PASSWORD}" ] && { [ "${#AAWG_WIFI_PASSWORD}" -lt 8 ] || [ "${#AAWG_WIFI_PASSWORD}" -gt 63 ]; }; then
+	echo "WARNING: AAWG_WIFI_PASSWORD is ${#AAWG_WIFI_PASSWORD} characters, WPA2 requires 8 to 63. Ignoring the configured value." >&2
+	AAWG_WIFI_PASSWORD=
+fi
+
+# A generated password is kept for the rest of the boot in /var/run, which is a
+# tmpfs. Restarting a service re-sources this file, and a fresh password there
+# would leave the daemon advertising credentials the running hostapd never saw.
+if [ -z "${AAWG_WIFI_PASSWORD}" ] && [ -s /var/run/aawg_wifi_password ]; then
+	echo "Using the Wifi password generated earlier in this boot"
+	export AAWG_WIFI_PASSWORD="$(cat /var/run/aawg_wifi_password)"
+fi
+
 if [ -z "${AAWG_WIFI_PASSWORD}" ]; then
+	echo "Using a randomly generated Wifi password"
 	export AAWG_WIFI_PASSWORD="$(cat /dev/urandom | tr -dc 'A-Za-z0-9@#' | head -c 16)"
+	# The password is a live credential, keep it out of every other account's reach
+	(umask 077; printf '%s\n' "${AAWG_WIFI_PASSWORD}" > /var/run/aawg_wifi_password)
+	chmod 600 /var/run/aawg_wifi_password
 fi
 
 set +o allexport

@@ -17,6 +17,8 @@ PIDFILE="/var/run/$DAEMON.pid"
 RETVAL=0
 
 start() {
+	RETVAL=0
+
 	printf "Setting up usb_gadgets: "
 	mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
 
@@ -55,17 +57,30 @@ start() {
 	fi
 
 	# Setting up usb_gadget:
-	echo "OK"
+	cd /sys/kernel/config/usb_gadget
+	if [ -e "$ACCESSORY_GADGET_NAME/configs/c.1/accessory.usb0" ] && [ -e "$DEFAULT_GADGET_NAME/configs/c.1/ffs.mtp" ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+		RETVAL=1
+	fi
 
 	printf "Starting $DAEMON: "
-	if [ ! -f "$FUNCTIONFS_PATH" ]; then
+	if [ ! -d "$FUNCTIONFS_PATH" ]; then
 		mkdir "$FUNCTIONFS_PATH"
 	fi
 	mount -t functionfs mtp "$FUNCTIONFS_PATH"
 	start-stop-daemon -S -b -q -m -p "$PIDFILE" -x "/usr/sbin/$DAEMON"
-	RETVAL=$?
+	STATUS=$?
 	sleep 1
-	[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
+	# start-stop-daemon -b only reports the fork, check the daemon is still alive
+	[ $STATUS = 0 ] && start-stop-daemon -K -t -q -p "$PIDFILE" || STATUS=1
+	if [ $STATUS = 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+		RETVAL=1
+	fi
 }
 
 stop() {
