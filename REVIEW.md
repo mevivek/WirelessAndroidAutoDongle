@@ -7,9 +7,17 @@ actual source; each cites `file:line`.
 file in the rootfs overlay, all five defconfigs, the Buildroot packaging, and CI. Findings were produced by
 independent passes over separate concerns (concurrency, resources, security, shell/boot, build), then each finding
 was re-checked by a reviewer whose job was to *refute* it. That second pass mattered: it downgraded most items and
-threw two out entirely. **Nothing here was reproduced on hardware, and no image was built.** Severities are judged
-by impact on a personal car accessory, not by textbook category. Items marked *narrowed* are real but only bite
-under stated preconditions — the happy path works, which is why released images work.
+threw two out entirely. Severities are judged by impact on a personal car accessory, not by textbook category. Items
+marked *narrowed* are real but only bite under stated preconditions — the happy path works, which is why released
+images work.
+
+**What was and was not verified mechanically.** All five defconfigs were resolved with
+`make BR2_EXTERNAL=../aa_wireless_dongle/ O=output/<board> <board>_defconfig` against the pinned Buildroot
+submodule (2025.02.1, `3815d578`): every board configures with no kconfig warnings, `BR2_PACKAGE_AAWG` and
+`BR2_PACKAGE_DBUS_CXX_CUSTOM` resolve on all five, and the removed `brcmfmac_sdio-firmware-rpi-custom` leaves no
+stale reference. The host-compile claims in I6 were also checked directly (see that item).
+**No image was built, nothing was cross-compiled, and nothing was reproduced on hardware** — reachability claims
+below are reasoned, not measured.
 
 | Severity | Count | Meaning |
 | --- | --- | --- |
@@ -274,12 +282,19 @@ Ordered by value per unit of effort. Nothing here is required for the device to 
 ### Structural (unlocks everything else)
 
 9. **I6 — A test seam.** There are zero automated tests, and the assumed blocker — needing dbus-cxx and real
-   hardware — is mostly false: `uevent.cpp` and `usb.cpp` compile on a stock host with no external dependencies,
-   and `common.cpp` needs only protobuf-lite. The real obstacle is that each singleton *constructs its own external
-   world* in its constructor (`UsbManager`'s writes to configfs before `main()` gets going). Injecting the sysfs
-   root and the netlink descriptor, keeping `instance()` as thin production wiring, makes the frame parser and the
-   uevent parser testable — which is where the bug density actually is. One transitive `#include` of dbus-cxx in
-   `bluetoothHandler.h` is what currently stops the proxy from building on a host.
+   hardware — is mostly false. **Verified on a stock host with `g++ -std=c++17 -fsyntax-only`:** `uevent.cpp` and
+   `usb.cpp` compile with no external dependencies at all, and under `-Wall -Wextra` they produce exactly one
+   warning between them (a benign `missing-field-initializers` on `sockaddr_nl` at `uevent.cpp:76`). `common.cpp`
+   needs only the generated protobuf headers. `proxyHandler.cpp` fails for a single reason —
+   `bluetoothHandler.h:6` → `bluetoothCommon.h:3` → `dbus-cxx.h` — and it includes that header only for one
+   `stopConnectWithRetry()` call, so a forward declaration would free the most bug-dense file in the daemon for
+   host testing.
+
+   The remaining obstacle is that each singleton *constructs its own external world* in its constructor
+   (`UsbManager` writes to configfs before `main()` gets going, so merely calling `instance()` in a test binary
+   performs privileged I/O). Injecting the sysfs root and the netlink descriptor, keeping `instance()` as thin
+   production wiring, makes the frame parser and the uevent parser testable — which is where the bug density
+   actually is.
 10. **I7 — Restructure CI.** A two-minute fast lane (ShellCheck, host unit tests, `-fsyntax-only`) gating the five
     hour-long image builds, plus a shared `BR2_DL_DIR` cache and per-defconfig ccache. Add `fail-fast: false`.
 11. **I8 — Release automation.** `SHA256SUMS`, `savedefconfig` and build provenance attached to each release, and a
