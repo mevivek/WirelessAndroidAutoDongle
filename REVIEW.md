@@ -26,6 +26,54 @@ below are reasoned, not measured.
 | Low | 22 | Real defects with narrow reachability, hygiene gaps, or missing diagnostics |
 | Refuted | 2 | Recorded so they are not re-reported |
 
+## Status
+
+Most findings below have been fixed. **The fix has not been compiled for the target or run on hardware** — the
+cross build is still the gate. Read this table before assuming an item is closed.
+
+| Finding | Status | Note |
+| --- | --- | --- |
+| H1, H4, H5 | **Fixed** | H1 and H5 have regression tests, including a negative control proving the H1 test detects the original bug |
+| H2 + M5 | **Fixed** | Retry lifecycle redesigned as one change: mutex + condition variable + sticky flag, armed before the listener exists |
+| **H3** | **Open — only partially mitigated** | See below. Do not treat this as closed. |
+| M1 | **Fixed**, differently than proposed | The suggested self-pipe + `poll()` was rejected on evidence: the vendored `f_accessory` has no `.poll` in `acc_fops`, so `poll()` returns `DEFAULT_POLLMASK` and always reports readable — it would have busy-spun. Fixed with mutex-guarded `pthread_t` handles instead. |
+| M2 | **Half fixed** | The untimed-read wedge is fixed with `SO_RCVTIMEO`. The RFCOMM descriptor leak is deliberately **not** fixed: `DBus::FileDescriptor` does not own the fd, but closing it also tears down the RFCOMM link, whose lifetime is protocol-relevant. Needs a hardware-tested change. |
+| M3, M4, M6 | **Fixed** | M4 rejected frames at the protocol maximum; the buffer now holds the largest possible frame |
+| L1–L14, L17, L20–L26, L28 | **Fixed** | L13 needed a second pass: the first fix left a manual restart minting a passphrase hostapd did not have |
+| **L18** | **Deliberately not applied** | `ieee80211w=1` was implemented, then reverted. With PMF on, hostapd 2.11 unconditionally installs an IGTK with BIP-CMAC-128; `brcmfmac` only advertises `AES_CMAC` when the firmware exposes the `mfp` iovar, and without it cfg80211 rejects the key — a *fatal* group-key failure that makes hostapd exit, fails the `pre-up`, and leaves `wlan0` with no AP and no IP. That is H5's outcome arriving through advisory hardening, on boards this project ships and CI cannot test. It belongs with F4, gated per board. |
+| L15, L16, L19, L27 | Not attempted | Policy or design changes rather than bugs; L15 (root password) cannot be fixed on a read-only rootfs without a design decision |
+| L27 | Not attempted | Belongs with F4 |
+
+### Why H3 is still open
+
+The daemon now refuses to hand out credentials to a device it has positively observed as unpaired, and the pairing
+state is read on the Bluetooth retry thread rather than the D-Bus dispatcher thread. That thread placement is not
+cosmetic: reading the property from the dispatcher thread made it a second, unsynchronised mutator of
+`Connection::m_listeningSignals` — the one member of dbus-cxx's `Connection` with no mutex — concurrently with the
+retry thread touching the same match-rule map key on the normal happy path. That is a real crash risk, so the check
+consults a mutex-guarded snapshot instead.
+
+But the check **fails open for any device path the retry thread has not yet seen**, and that is exactly what an
+attacker looks like: BlueZ creates the `Device1` object at pair time, and the peer opens the RFCOMM channel
+immediately — up to 20 seconds before the next enumeration pass. It is also exactly what a legitimate
+first-time-paired phone looks like, and refusing those would break setup for every new phone. The two are
+indistinguishable from this data source, so the C++ check is a backstop, not a gate.
+
+The load-bearing mitigation is bounding the pairing window. That was attempted here (`PairableTimeout`) and
+reverted: `setPairable(true)` runs exactly once for the whole process lifetime in dongle mode, so a timeout would
+make the dongle permanently un-bondable five minutes after boot — in the one mode where the headunit must enrol.
+Closing H3 properly needs F5: enrol once, then clear `Pairable` from the daemon.
+
+### Still open after this pass
+
+- **H3**, as above.
+- The RFCOMM descriptor leak on the handshake success path (part of M2).
+- `retryConnectLoop()` has no exception barrier, so a `DBus::Error` from `getBluezObjects()` on that thread still
+  terminates the process. Pre-existing and unchanged; `main()`'s barrier cannot reach another thread. Roughly a
+  six-line fix, but it needs a compile to validate.
+- `main()`'s barrier is reachable at the startup and per-session `powerOn()` throw sites, but not for a
+  `std::system_error` after the proxy thread exists — there is no way to cancel a pending `accept()`.
+
 ---
 
 ## High
